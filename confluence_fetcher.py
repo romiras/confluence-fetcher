@@ -1,36 +1,10 @@
 from typing import List
 import os
-import requests
 import argparse
 import re
 import subprocess
 from bs4 import BeautifulSoup, Tag
-
-def get_pages_for_space(account_name: str, user_email: str, api_token: str, space_id: str) -> List[dict] | None:
-    """Fetches all pages for a given space from the Confluence API."""
-
-    base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
-    url = f"{base_url}/spaces/{space_id}/pages"
-    auth = (user_email, api_token)
-    headers = {
-        "Accept": "application/json"
-    }
-    pages = []
-    while url:
-        try:
-            response = requests.get(url, headers=headers, auth=auth)
-            response.raise_for_status()
-            data = response.json()
-            pages.extend(data.get('results', []))
-            next_path = data.get('_links', {}).get('next')
-            if next_path:
-                url = f"https://{account_name}.atlassian.net{next_path}"
-            else:
-                url = None
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching pages for space {space_id}: {e}")
-            return None
-    return pages
+from confluence_client import ConfluenceClient, ConfluenceAPIError
 
 
 def sanitize_directory_name(name: str) -> str:
@@ -41,100 +15,6 @@ def sanitize_directory_name(name: str) -> str:
     # Replace spaces with underscores
     sanitized_name = sanitized_name.replace(' ', '_')
     return sanitized_name
-
-
-def get_spaces(account_name, user_email, api_token) -> List[dict] | None:
-    """Fetches all spaces from the Confluence API."""
-
-    base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
-    url = f"{base_url}/spaces"
-    auth = (user_email, api_token)
-    headers = {
-        "Accept": "application/json"
-    }
-
-    spaces = []
-    while url:
-        try:
-            response = requests.get(url, headers=headers, auth=auth)
-            response.raise_for_status()  # Raise an exception for bad status codes
-            data = response.json()
-            spaces.extend(data.get('results', []))
-            next_path = data.get('_links', {}).get('next')
-            if next_path:
-                url = f"https://{account_name}.atlassian.net{next_path}"
-            else:
-                url = None
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching spaces: {e}")
-            return None
-    return spaces
-
-
-def get_page_content(page_id: str, account_name: str, user_email: str, api_token: str) -> str | None:
-    """Gets the HTML content of a single page."""
-
-    base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
-    url = f"{base_url}/pages/{page_id}"
-    params = {
-        "body-format": "storage",
-        "status": "current"
-    }
-    auth = (user_email, api_token)
-    headers = {
-        "Accept": "application/json"
-    }
-    try:
-        response = requests.get(url, headers=headers, auth=auth, params=params)
-        response.raise_for_status()
-        data = response.json()
-        return data.get('body', {}).get('storage', {}).get('value')
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching content for page {page_id}: {e}")
-        return None
-
-
-def get_page_attachments(page_id: str, account_name: str, user_email: str, api_token: str) -> List[dict] | None:
-    """Fetches all attachments for a given page."""
-
-    base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
-    url = f"{base_url}/pages/{page_id}/attachments"
-    auth = (user_email, api_token)
-    headers = {
-        "Accept": "application/json"
-    }
-
-    attachments = []
-    while url:
-        try:
-            response = requests.get(url, headers=headers, auth=auth)
-            response.raise_for_status()
-            data = response.json()
-            attachments.extend(data.get('results', []))
-            next_path = data.get('_links', {}).get('next')
-            if next_path:
-                url = f"https://{account_name}.atlassian.net{next_path}"
-            else:
-                url = None
-        except requests.exceptions.RequestException as e:
-            print(f"Error fetching attachments for page {page_id}: {e}")
-            return None
-    return attachments
-
-
-def download_attachment(download_url: str, file_path: str, auth: tuple[str, str]) -> bool:
-    """Downloads a single attachment."""
-
-    try:
-        response = requests.get(download_url, auth=auth, stream=True)
-        response.raise_for_status()
-        with open(file_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"    Error downloading attachment: {e}")
-        return False
 
 
 def html_to_markdown(html_content: str) -> str | None:
@@ -156,7 +36,7 @@ def html_to_markdown(html_content: str) -> str | None:
         return None
 
 
-def process_spaces(spaces: List[dict], args: argparse.Namespace, user_email: str, api_token: str) -> None:
+def process_spaces(spaces: List[dict], args: argparse.Namespace, client: ConfluenceClient) -> None:
     for space in spaces:
         space_name = space.get('name', 'Untitled_Space')
         space_key = space.get('key', 'NO_KEY')
@@ -172,11 +52,13 @@ def process_spaces(spaces: List[dict], args: argparse.Namespace, user_email: str
             continue
 
         print(f"  Fetching pages for space '{space_name}'...")
-        pages = get_pages_for_space(args.accountname, user_email, api_token, space_id)
-        if not pages:
-            print("  No pages found or error fetching pages.")
-            continue
 
+        try:
+            pages = client.get_pages_for_space(space_id)
+        except ConfluenceAPIError as e:
+            print(f"  Error processing space: {e}")
+            continue
+    
         print(f"  Found {len(pages)} pages.")
         for page in pages:
             page_title = page.get('title', 'Untitled Page')
@@ -184,42 +66,49 @@ def process_spaces(spaces: List[dict], args: argparse.Namespace, user_email: str
             page_dir = os.path.join(space_dir, sanitized_page_title)
             os.makedirs(page_dir, exist_ok=True)
             print(f"\n  Processing page: '{page_title}'")
-            export_page_content(page, page_dir, args.accountname, user_email, api_token)
+            export_page_content(page, page_dir, client)
 
     print("\nDone.")
 
 
-def parse_and_validate_args() -> tuple[argparse.Namespace, str, str]:
+def parse_and_validate_args() -> tuple[argparse.Namespace, ConfluenceClient]:
     parser = argparse.ArgumentParser(description="Fetch Confluence spaces and create directories.")
     parser.add_argument('-a', '--accountname', required=True, help='Confluence account name.')
     parser.add_argument('-d', '--outputdir', required=True, help='Local output directory.')
     parser.add_argument('-s', '--spaces', help='Comma-separated list of space keys to fetch.')
     args = parser.parse_args()
-    user_email = os.getenv('CONFL_USER_EMAIL')
-    api_token = os.getenv('CONFL_API_TOKEN')
-    if not api_token or not user_email:
-        print('Error: CONFL_USER_EMAIL and CONFL_API_TOKEN environment variables must be set.')
+
+    try:
+        client = ConfluenceClient(
+            account_name=args.accountname,
+            user_email=os.getenv('CONFL_USER_EMAIL', ''),
+            api_token=os.getenv('CONFL_API_TOKEN', '')
+        )
+        return args, client
+    except ValueError as e:
+        print(f'Error: {e}')
         exit(1)
-    return args, user_email, api_token
 
 
-def handle_attachments(page_dir: str, page: dict, account_name: str, user_email: str, api_token: str) -> None:
+def handle_attachments(page_dir: str, page: dict, client: ConfluenceClient) -> None:
     attachments_dir = os.path.join(page_dir, 'attachments')
-    attachments = get_page_attachments(page['id'], account_name, user_email, api_token)
+    attachments = client.get_page_attachments(page['id'])
     if attachments:
         os.makedirs(attachments_dir, exist_ok=True)
         print(f"    Found {len(attachments)} attachments.")
-        auth = (user_email, api_token)
-        base_url = f"https://{account_name}.atlassian.net"
         
         for attachment in attachments:
             file_name = attachment.get('title')
             download_link = attachment.get('_links', {}).get('download')
             if file_name and download_link:
-                download_url = f"{base_url}{download_link}"
-                file_path = os.path.join(attachments_dir, file_name)
-                if download_attachment(download_url, file_path, auth):
+                try:
+                    content = client.download_attachment(download_link)
+                    file_path = os.path.join(attachments_dir, file_name)
+                    with open(file_path, 'wb') as f:
+                        f.write(content)
                     print(f"      Downloaded: {file_name}")
+                except ConfluenceAPIError as e:
+                    print(f"      Error downloading {file_name}: {e}")
 
 
 # Rewrite links in HTML
@@ -238,15 +127,24 @@ def rewrite_links(html_content: str) -> str:
     return str(soup)
 
 
-def export_page_content(page: dict, page_dir: str, account_name: str, user_email: str, api_token: str) -> None:
+def export_page_content(page: dict, page_dir: str, client: ConfluenceClient) -> None:
     """Process a single page's content and attachments."""
 
-    html_content = get_page_content(page['id'], account_name, user_email, api_token)
+    try:
+        page_content = client.get_page_content(page['id'])
+    except ConfluenceAPIError as e:
+        print(f"    Error fetching page content: {e}")
+        return
+
+    html_content = page_content.get('body', {}).get('storage', {}).get('value')
     if not html_content:
         print(f"    No content found for page: {page.get('title', 'Untitled Page')}")
         return
 
-    handle_attachments(page_dir, page, account_name, user_email, api_token)
+    try:
+        handle_attachments(page_dir, page, client)
+    except ConfluenceAPIError as e:
+        print(f"    Error fetching attachments: {e}")
 
     # Process HTML content
     modified_html = rewrite_links(html_content)
@@ -281,13 +179,17 @@ def prepare_output_directory(spaces: List[dict] | None, conf_spaces: str, output
 def main():
     """Main function to execute the script."""
 
-    args, user_email, api_token = parse_and_validate_args()
+    args, client = parse_and_validate_args()
 
     print(f"Fetching spaces from {args.accountname}...")
-    spaces = get_spaces(args.accountname, user_email, api_token)
+    try:
+        spaces = client.get_spaces()
+    except ConfluenceAPIError as e:
+        print(f"Error getting spaces: {e}")
+        exit(1)
 
     spaces = prepare_output_directory(spaces, args.spaces, args.outputdir)
-    process_spaces(spaces, args, user_email, api_token)
+    process_spaces(spaces, args, client)
 
 
 if __name__ == '__main__':
