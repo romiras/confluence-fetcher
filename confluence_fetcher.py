@@ -3,6 +3,31 @@ import requests
 import argparse
 import re
 
+def get_pages_for_space(account_name, user_email, api_token, space_id):
+    """Fetches all pages for a given space from the Confluence API."""
+    base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
+    url = f"{base_url}/spaces/{space_id}/pages"
+    auth = (user_email, api_token)
+    headers = {
+        "Accept": "application/json"
+    }
+    pages = []
+    while url:
+        try:
+            response = requests.get(url, headers=headers, auth=auth)
+            response.raise_for_status()
+            data = response.json()
+            pages.extend(data.get('results', []))
+            next_path = data.get('_links', {}).get('next')
+            if next_path:
+                url = f"https://{account_name}.atlassian.net{next_path}"
+            else:
+                url = None
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching pages for space {space_id}: {e}")
+            return None
+    return pages
+
 def sanitize_directory_name(name):
     """Sanitizes a string to be a valid directory name."""
     # Remove invalid characters
@@ -69,6 +94,21 @@ def main():
             space_dir = os.path.join(args.outputdir, sanitized_name)
             os.makedirs(space_dir, exist_ok=True)
             print(f"  - Created directory for space: '{space_name}' (Key: {space_key}) -> {sanitized_name}")
+
+            # Milestone 1A: Fetch and list pages for each space
+            space_id = space.get('id')
+            if not space_id:
+                print(f"    Warning: No ID found for space '{space_name}' (Key: {space_key})")
+                continue
+            print(f"    Fetching pages for space '{space_name}'...")
+            pages = get_pages_for_space(args.accountname, user_email, api_token, space_id)
+            if pages:
+                print(f"    Found {len(pages)} pages:")
+                for page in pages:
+                    title = page.get('title', 'Untitled Page')
+                    print(f"      - {title}")
+            else:
+                print("    No pages found or error fetching pages.")
         print("Done.")
 
 if __name__ == "__main__":
