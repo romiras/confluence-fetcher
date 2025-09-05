@@ -42,6 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch Confluence spaces and create directories.")
     parser.add_argument("-a", "--accountname", required=True, help="Confluence account name.")
     parser.add_argument("-d", "--outputdir", required=True, help="Local output directory.")
+    parser.add_argument("-s", "--spaces", help="Comma-separated list of space keys to fetch.")
     args = parser.parse_args()
 
     user_email = os.getenv("CONFL_USER_EMAIL")
@@ -54,6 +55,11 @@ def main():
     spaces = get_spaces(args.accountname, user_email, api_token)
 
     if spaces:
+        if args.spaces:
+            selected_space_keys = [key.strip() for key in args.spaces.split(',')]
+            spaces = [s for s in spaces if s.get('key') in selected_space_keys]
+            print(f"Filtering for spaces: {', '.join(selected_space_keys)}")
+
         print(f"Found {len(spaces)} spaces. Creating directories in {args.outputdir}...")
         os.makedirs(args.outputdir, exist_ok=True)
         for space in spaces:
