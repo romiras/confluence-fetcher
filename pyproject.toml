@@ -1,7 +1,7 @@
 [project]
 name = "confluence-fetcher"
 version = "0.1.0"
-description = "Add your description here"
+description = "This tool is a command-line interface (CLI) utility designed to fetch pages from a Confluence account and export them to a local directory. It converts page content to Markdown, downloads all associated attachments, and organizes the output in a clean, hierarchical structure."
 readme = "README.md"
 requires-python = ">=3.12.4"
 dependencies = [
