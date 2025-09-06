@@ -23,11 +23,27 @@ class ConfluenceClient:
         """
 
         self.base_url = f"https://{account_name}.atlassian.net/wiki/api/v2"
+        self.download_base_url = f"https://{account_name}.atlassian.net/wiki"  # Base URL for downloads without api/v2
         self.account_name = account_name
         self.auth = (user_email, api_token)
         self.headers = {
             "Accept": "application/json"
         }
+
+
+    def _build_url(self, endpoint: str) -> str:
+        """Construct the full API URL for a given endpoint."""
+
+        res = urlsplit(self.base_url) # to handle existing path in base_url
+        return urljoin(self.base_url, f"{res.path}{endpoint}")
+
+
+    def _build_download_url(self, endpoint: str) -> str:
+        """Construct the full download URL for a given endpoint."""
+
+        res = urlsplit(self.download_base_url) # to handle existing path in base_url
+        return urljoin(self.download_base_url, f"{res.path}{endpoint}")
+
 
     def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Make an HTTP request to the Confluence API with error handling.
@@ -44,12 +60,10 @@ class ConfluenceClient:
             ConfluenceAPIError: If the API request fails
         """
 
-        res = urlsplit(self.base_url)
-        url = urljoin(self.base_url, f"{res.path}{endpoint}")
         try:
             response = requests.request(
                 method,
-                url,
+                self._build_url(endpoint),
                 auth=self.auth,
                 headers=self.headers,
                 **kwargs
@@ -148,14 +162,17 @@ class ConfluenceClient:
             The attachment content as bytes
         """
 
-        # Remove the base API path if it's in the URL since it's a direct download
-        if download_url.startswith('/wiki/api/v2'):
-            download_url = download_url[len('/wiki/api/v2'):]
-            
-        response = requests.get(
-            urljoin(self.base_url, download_url),
-            auth=self.auth,
-            stream=True
-        )
-        response.raise_for_status()
+        url = self._build_download_url(download_url)
+
+        try:
+            response = requests.get(
+                url,
+                auth=self.auth,
+                stream=True
+            )
+            response.raise_for_status()
+    
+        except requests.exceptions.HTTPError as e:
+            raise ConfluenceAPIError(f"Attachment download failed: {e}", response.status_code) # pyright: ignore[reportPossiblyUnboundVariable]
+    
         return response.content
